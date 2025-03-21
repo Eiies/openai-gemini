@@ -170,15 +170,64 @@ async function handleCompletions(req, apiKey) {
   if (req.stream) {
     url += "?alt=sse";
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify(await transformRequest(req)), // try
-  });
+
+  // 添加超时和重试逻辑
+  const MAX_RETRIES = 3;
+  const TIMEOUT_MS = 30000; // 30秒超时
+
+  let retries = 0;
+  let response;
+
+  while (retries < MAX_RETRIES) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+      response = await fetch(url, {
+        method: "POST",
+        headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+        body: JSON.stringify(await transformRequest(req)),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        break; // 成功获取响应，跳出重试循环
+      } else if (response.status >= 500) {
+        // 服务器错误，尝试重试
+        retries++;
+        if (retries < MAX_RETRIES) {
+          console.warn(`API请求失败，状态码: ${response.status}，正在重试 (${retries}/${MAX_RETRIES})...`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // 指数退避
+          continue;
+        }
+      } else {
+        // 客户端错误，不重试
+        break;
+      }
+    } catch (error) {
+      retries++;
+      if (error.name === 'AbortError') {
+        console.error('请求超时');
+      } else {
+        console.error('请求失败:', error);
+      }
+
+      if (retries >= MAX_RETRIES) {
+        return new Response(
+          JSON.stringify({ error: { message: `请求失败: ${error.message}`, type: "api_error" } }),
+          fixCors({ status: 500, headers: { "Content-Type": "application/json" } })
+        );
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // 指数退避
+    }
+  }
 
   let body = response.body;
   if (response.ok) {
-    let id = generateChatcmplId(); //"chatcmpl-8pMMaqXMK68B3nyDBrapTDrhkHBQK";
+    let id = generateChatcmplId();
     if (req.stream) {
       body = response.body
         .pipeThrough(new TextDecoderStream())

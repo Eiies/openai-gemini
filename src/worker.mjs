@@ -36,6 +36,10 @@ export default {
           assert(request.method === "GET");
           return handleModels(apiKey).catch(errHandler);
         default:
+          // 检查是否是API路径，如果不是则显示伪装页面
+          if (!pathname.includes("/v1/") && !pathname.includes("/v1beta/")) {
+            return handleFakePage();
+          }
           throw new HttpError("404 Not Found", 404);
       }
     } catch (err) {
@@ -187,7 +191,7 @@ async function handleCompletions(req, apiKey) {
         method: "POST",
         headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
         body: JSON.stringify(await transformRequest(req)),
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
@@ -198,8 +202,10 @@ async function handleCompletions(req, apiKey) {
         // 服务器错误，尝试重试
         retries++;
         if (retries < MAX_RETRIES) {
-          console.warn(`API请求失败，状态码: ${response.status}，正在重试 (${retries}/${MAX_RETRIES})...`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // 指数退避
+          console.warn(
+            `API请求失败，状态码: ${response.status}，正在重试 (${retries}/${MAX_RETRIES})...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1000 * retries)); // 指数退避
           continue;
         }
       } else {
@@ -208,20 +214,25 @@ async function handleCompletions(req, apiKey) {
       }
     } catch (error) {
       retries++;
-      if (error.name === 'AbortError') {
-        console.error('请求超时');
+      if (error.name === "AbortError") {
+        console.error("请求超时");
       } else {
-        console.error('请求失败:', error);
+        console.error("请求失败:", error);
       }
 
       if (retries >= MAX_RETRIES) {
         return new Response(
-          JSON.stringify({ error: { message: `请求失败: ${error.message}`, type: "api_error" } }),
-          fixCors({ status: 500, headers: { "Content-Type": "application/json" } })
+          JSON.stringify({
+            error: { message: `请求失败: ${error.message}`, type: "api_error" },
+          }),
+          fixCors({
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          })
         );
       }
 
-      await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // 指数退避
+      await new Promise((resolve) => setTimeout(resolve, 1000 * retries)); // 指数退避
     }
   }
 
@@ -547,3 +558,84 @@ async function toOpenAiStreamFlush(controller) {
     controller.enqueue("data: [DONE]" + delimiter);
   }
 }
+
+// 修改伪装页面处理函数
+const handleFakePage = async () => {
+  try {
+    // 尝试直接读取文件内容
+    // 在不同环境中，文件路径的处理方式不同
+    let indexHtmlPath;
+
+    // 根据当前环境确定正确的路径
+    if (typeof process !== "undefined" && process.cwd) {
+      // Node.js 环境
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      indexHtmlPath = join(process.cwd(), "public", "index.html");
+
+      try {
+        const html = await readFile(indexHtmlPath, "utf8");
+        return new Response(html, {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+          },
+        });
+      } catch (fsError) {
+        console.error("文件系统读取失败:", fsError);
+      }
+    }
+
+    // 尝试通过 fetch API 获取（适用于某些无服务器环境）
+    try {
+      // 尝试相对路径
+      const response = await fetch("/public/index.html");
+      if (response.ok) {
+        const html = await response.text();
+        return new Response(html, {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+          },
+        });
+      }
+    } catch (fetchError) {
+      console.error("Fetch 获取失败:", fetchError);
+    }
+  } catch (error) {
+    console.error("无法加载伪装页面:", error);
+  }
+
+  // 如果所有方法都失败，返回内联的HTML
+  console.log("使用内联HTML作为备用方案");
+
+  // 这里可以放入 public/index.html 的内容作为备用
+  return new Response(
+    `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>个人技术博客 - 编程与AI探索</title>
+</head>
+<body>
+  <header>
+    <h1>编程与AI探索</h1>
+    <p>分享我的技术学习之旅</p>
+  </header>
+  <div>
+    <h2>欢迎访问我的个人技术博客</h2>
+  </div>
+  <footer>
+    <p>&copy; 2023-2024 编程与AI探索 | 保留所有权利</p>
+  </footer>
+</body>
+</html>`,
+    {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+      },
+    }
+  );
+};

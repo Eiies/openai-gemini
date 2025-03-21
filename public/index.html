@@ -173,7 +173,20 @@
   </div>
 
   <footer>
-    <p>&copy; 2023-2024 编程与AI探索 | 保留所有权利</p>
+    <p>&copy;2023 - <script>document.write(new Date().getFullYear())</script> 编程与AI探索 | <span id="current-time"></span> | 保留所有权利</p>
+    <script>
+      // 更新当前时间的函数
+      function updateTime() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('zh-CN');
+        document.getElementById('current-time').textContent = timeString;
+      }
+
+      // 初始更新时间
+      updateTime();
+      // 每秒更新一次时间
+      setInterval(updateTime, 1000);
+    </script>
   </footer>
 </body>
 </html>
